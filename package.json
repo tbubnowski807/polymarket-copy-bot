@@ -1,0 +1,53 @@
+{
+  "name": "polymarket-copy-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hermes-powered self-improving Polymarket copy-trading RESEARCH bot. Paper trading only. No real trades, no keys, no signing.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:migrate": "prisma migrate dev --name init && prisma generate",
+    "db:push": "prisma db push && prisma generate",
+    "db:generate": "prisma generate",
+    "seed": "tsx src/scripts/seed.ts",
+    "reset": "tsx src/scripts/reset.ts",
+    "scan:leaderboard": "tsx src/scripts/scanLeaderboard.ts",
+    "scan:wallets": "tsx src/scripts/scanWallets.ts",
+    "monitor:trades": "tsx src/scripts/monitorTrades.ts",
+    "score:trades": "tsx src/scripts/scoreTrades.ts",
+    "paper:update-pnl": "tsx src/scripts/updatePnl.ts",
+    "review:outcomes": "tsx src/scripts/reviewOutcomes.ts",
+    "update:rules": "tsx src/scripts/updateRules.ts",
+    "report:daily": "tsx src/scripts/reportDaily.ts",
+    "report:weekly": "tsx src/scripts/reportWeekly.ts",
+    "report:print": "tsx src/scripts/printLatestReport.ts",
+    "progress:check": "tsx src/scripts/progressCheck.ts",
+    "loop:hourly": "tsx src/scripts/loopHourly.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "prisma": {
+    "seed": "tsx src/scripts/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "next": "^14.2.33",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.13.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.6",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "prisma": "^5.22.0",
+    "tailwindcss": "^3.4.14",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

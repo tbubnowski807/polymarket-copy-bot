@@ -1,0 +1,78 @@
+# Runs the Polymarket bot ENGINE 24/7 in the cloud, for free, using GitHub's
+# built-in scheduler (GitHub Actions). This replaces the cron jobs that
+# currently run on your Mac — so the bot keeps working even when your Mac is off.
+#
+# It talks to your cloud database (Neon Postgres) via the DATABASE_URL secret.
+# Times are in UTC. The daily/weekly times below line up with ~10 PM US Eastern.
+#
+# PAPER TRADING ONLY — this never places real trades.
+
+name: Polybot Engine
+
+on:
+  schedule:
+    - cron: "0 * * * *"     # every hour  -> monitor + score + paper PnL + review
+    - cron: "0 */4 * * *"   # every 4h    -> scan top 500 leaderboard wallets
+    - cron: "0 2 * * *"     # ~10pm ET    -> auto rule update + end-of-day report
+    - cron: "15 2 * * 1"    # ~10pm ET Sun-> weekly report
+  workflow_dispatch: {}      # lets you (or me) run it manually from the GitHub UI
+
+# Prevent overlapping runs from stepping on each other.
+concurrency:
+  group: polybot-engine
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Ensure database schema is up to date
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npx prisma db push --skip-generate
+
+      - name: Run the scheduled task
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATA_MODE: live
+          # Optional Telegram alerts (leave the GitHub secrets unset to disable):
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -e
+          echo "Triggered by schedule: '${{ github.event.schedule }}'"
+          case "${{ github.event.schedule }}" in
+            "0 */4 * * *")
+              echo "== 4-hourly wallet scan (top 500) =="
+              SCAN_LIMIT=500 PROFILE_LIMIT=500 npm run scan:leaderboard
+              SCAN_LIMIT=500 PROFILE_LIMIT=500 npm run scan:wallets
+              ;;
+            "0 2 * * *")
+              echo "== daily: auto rule update + end-of-day report =="
+              npm run update:rules
+              npm run report:daily
+              ;;
+            "15 2 * * 1")
+              echo "== weekly report =="
+              npm run report:weekly
+              ;;
+            *)
+              echo "== hourly loop: monitor -> score -> paper PnL -> review =="
+              npm run loop:hourly
+              ;;
+          esac

@@ -1,0 +1,271 @@
+// Prisma schema for Polymarket Copy Bot (paper-trading research system).
+// SQLite locally; Vercel-ready (swap datasource to Postgres for prod).
+// NOTE: SQLite does not support native enums, so status/decision fields are
+// String with documented allowed values (see comments).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// A single run of the leaderboard scanner.
+model LeaderboardScan {
+  id             String   @id @default(cuid())
+  source         String // "polymarket" | "bullpen"
+  scannedAt      DateTime @default(now())
+  walletCount    Int
+  lookbackDays   Int
+  rawSummaryJson String // JSON string (SQLite has no JSON type)
+}
+
+// Aggregate profile + scores for a tracked wallet.
+model WalletProfile {
+  id                    String   @id @default(cuid())
+  address               String   @unique
+  label                 String?
+  sourceRank            Int?
+  status                String   @default("watch") // "track" | "watch" | "ignore"
+  statusReason          String?
+  roi30d                Float    @default(0)
+  consistencyScore      Float    @default(0)
+  copyabilityScore      Float    @default(0)
+  oneHitWonderPenalty   Float    @default(0)
+  globalScore           Float    @default(0)
+  bestCategory          String?
+  categoryStrengthsJson String   @default("{}")
+  averageTradeSize      Float    @default(0)
+  tradeCount30d         Int      @default(0)
+  resolvedTradeCount30d Int      @default(0)
+  winRate30d            Float    @default(0)
+  averageLiquidity      Float    @default(0)
+  averageSpread         Float    @default(0)
+  averageEntryTiming    Float    @default(0) // 0..1, fraction of market life elapsed at entry (lower = earlier)
+  copyabilityNotes      String?
+  riskNotes             String?
+  lastScannedAt         DateTime @default(now())
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  observedTrades ObservedTrade[]
+
+  @@index([globalScore])
+  @@index([status])
+}
+
+// A trade we observed a tracked wallet make.
+model ObservedTrade {
+  id              String   @id @default(cuid())
+  walletAddress   String
+  marketId        String
+  conditionId     String?
+  marketQuestion  String
+  marketCategory  String?
+  outcome         String // e.g. "Yes" | "No" | outcome label
+  side            String // "BUY" | "SELL"
+  walletEntryPrice Float
+  detectedPrice   Float
+  size            Float
+  timestamp       DateTime
+  rawTradeJson    String
+  createdAt       DateTime @default(now())
+
+  wallet          WalletProfile?  @relation(fields: [walletAddress], references: [address])
+  decisions       DecisionJournal[]
+
+  @@index([walletAddress])
+  @@index([marketId])
+  @@index([timestamp])
+}
+
+// A point-in-time snapshot of a market's pricing/liquidity.
+model MarketSnapshot {
+  id               String   @id @default(cuid())
+  marketId         String
+  conditionId      String?
+  question         String
+  category         String?
+  yesPrice         Float?
+  noPrice          Float?
+  bestBid          Float?
+  bestAsk          Float?
+  spread           Float?
+  liquidity        Float?
+  volume           Float?
+  timeToResolution Float? // hours until resolution (null if unknown)
+  collectedAt      DateTime @default(now())
+  rawMarketJson    String
+
+  @@index([marketId])
+  @@index([collectedAt])
+}
+
+// The bot's decision about whether to copy an observed trade.
+model DecisionJournal {
+  id                    String   @id @default(cuid())
+  observedTradeId       String
+  walletAddress         String
+  marketId              String
+  decision              String // "paper_copy" | "watchlist" | "skip"
+  copyScore             Float
+  confidence            Float
+  reasonsJson           String   @default("[]")
+  risksJson             String   @default("[]")
+  // Score breakdown components:
+  walletQualityScore    Float    @default(0)
+  roiScore              Float    @default(0)
+  consistencyScore      Float    @default(0)
+  copyabilityScore      Float    @default(0)
+  categoryFitScore      Float    @default(0)
+  entryTimingScore      Float    @default(0)
+  spreadScore           Float    @default(0)
+  liquidityScore        Float    @default(0)
+  thesisScore           Float    @default(0)
+  simulatedPositionSize Float    @default(0)
+  ruleSetVersion        Int?
+  createdAt             DateTime @default(now())
+
+  observedTrade ObservedTrade   @relation(fields: [observedTradeId], references: [id])
+  paperTrades   PaperTrade[]
+  reviews       OutcomeReview[]
+
+  @@index([walletAddress])
+  @@index([decision])
+  @@index([createdAt])
+}
+
+// A simulated (paper) copy trade. NEVER a real order.
+model PaperTrade {
+  id                    String    @id @default(cuid())
+  decisionJournalId     String
+  walletAddress         String
+  marketId              String
+  outcome               String
+  side                  String
+  entryPrice            Float
+  currentPrice          Float
+  simulatedPositionSize Float
+  unrealizedPnl         Float     @default(0)
+  realizedPnl           Float     @default(0)
+  status                String    @default("open") // "open" | "closed" | "resolved"
+  openedAt              DateTime  @default(now())
+  closedAt              DateTime?
+  resolvedAt            DateTime?
+
+  decision      DecisionJournal @relation(fields: [decisionJournalId], references: [id])
+  pnlSnapshots  PnlSnapshot[]
+  reviews       OutcomeReview[]
+
+  @@index([status])
+  @@index([walletAddress])
+}
+
+// Hourly PnL sample for a paper trade.
+model PnlSnapshot {
+  id           String   @id @default(cuid())
+  paperTradeId String
+  price        Float
+  pnl          Float
+  collectedAt  DateTime @default(now())
+
+  paperTrade PaperTrade @relation(fields: [paperTradeId], references: [id])
+
+  @@index([paperTradeId])
+  @@index([collectedAt])
+}
+
+// Retrospective review of whether a decision was good.
+model OutcomeReview {
+  id                String   @id @default(cuid())
+  decisionJournalId String
+  paperTradeId      String?
+  reviewTime        DateTime @default(now())
+  priceAfter1h      Float?
+  priceAfter6h      Float?
+  priceAfter24h     Float?
+  finalOutcome      String?
+  simulatedPnl      Float?
+  wasDecisionGood   Boolean?
+  lessonsJson       String   @default("[]")
+  createdAt         DateTime @default(now())
+
+  decision   DecisionJournal @relation(fields: [decisionJournalId], references: [id])
+  paperTrade PaperTrade?     @relation(fields: [paperTradeId], references: [id])
+
+  @@index([decisionJournalId])
+}
+
+// A versioned set of scoring/decision rules.
+model RuleSet {
+  id        String   @id @default(cuid())
+  version   Int      @unique
+  active    Boolean  @default(false)
+  rulesJson String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  changesFrom RuleChange[] @relation("oldRuleSet")
+  changesTo   RuleChange[] @relation("newRuleSet")
+}
+
+// A logged, explained change from one RuleSet version to the next.
+model RuleChange {
+  id              String   @id @default(cuid())
+  oldRuleSetId    String?
+  newRuleSetId    String
+  changedBy       String   @default("hermes")
+  reason          String
+  evidenceSummary String
+  beforeJson      String
+  afterJson       String
+  expectedImprovement String?
+  createdAt       DateTime @default(now())
+
+  oldRuleSet RuleSet? @relation("oldRuleSet", fields: [oldRuleSetId], references: [id])
+  newRuleSet RuleSet  @relation("newRuleSet", fields: [newRuleSetId], references: [id])
+}
+
+// End-of-day report (also weekly when type = "weekly").
+model DailyReport {
+  id              String   @id @default(cuid())
+  date            String // YYYY-MM-DD
+  type            String   @default("daily") // "daily" | "weekly"
+  paperPnl        Float
+  winRate         Float
+  openPositions   Int
+  newSignals      Int
+  copiedSignals   Int
+  watchedSignals  Int
+  skippedSignals  Int
+  bestWalletsJson String   @default("[]")
+  worstWalletsJson String  @default("[]")
+  ruleChangesJson String   @default("[]")
+  summary         String
+  sentToTelegram  Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([date])
+}
+
+// Benchmark comparison snapshots (bot-filtered vs blind copy etc.).
+model BenchmarkSnapshot {
+  id                 String   @id @default(cuid())
+  date               String
+  botFilteredPnl     Float    @default(0)
+  blindCopyPnl       Float    @default(0)
+  watchlistPnl       Float    @default(0)
+  skippedHypotheticalPnl Float @default(0)
+  missedWinners      Int      @default(0)
+  avoidedLosers      Int      @default(0)
+  badCopies          Int      @default(0)
+  goodSkips          Int      @default(0)
+  lateEntriesAvoided Int      @default(0)
+  spreadLossesAvoided Int     @default(0)
+  detailsJson        String   @default("{}")
+  createdAt          DateTime @default(now())
+
+  @@index([date])
+}

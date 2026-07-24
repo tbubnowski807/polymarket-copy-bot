@@ -1,0 +1,23 @@
+node_modules
+.next
+out
+build
+dist
+
+# env / secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# local database
+*.db
+*.db-journal
+prisma/*.db
+prisma/*.db-journal
+prisma/migrations/dev.db*
+
+# misc
+.DS_Store
+*.log
+coverage
+.vercel
