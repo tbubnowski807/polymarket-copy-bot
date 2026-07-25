@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { log } from "@/lib/logger";
 import { getMarket } from "@/adapters/markets";
 import { scoreTrade } from "@/scoring/trade";
+import { classifyTradeDirection } from "@/scoring/direction";
+import { unrealizedPnl } from "@/scoring/paper";
 import { getActiveRules, j, parse, isMissingMarketError } from "@/engine/helpers";
 import { config } from "@/lib/config";
 
@@ -13,12 +15,13 @@ export async function scoreTrades() {
   // ObservedTrades that have no decision yet.
   const decided = await prisma.decisionJournal.findMany({ select: { observedTradeId: true } });
   const decidedSet = new Set(decided.map((d) => d.observedTradeId));
-  const observed = await prisma.observedTrade.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
+  // Process oldest-first so a wallet's BUY is handled before its later SELL.
+  const observed = await prisma.observedTrade.findMany({ orderBy: { timestamp: "asc" }, take: 500 });
   const pending = observed.filter((o) => !decidedSet.has(o.id));
 
   log.info(`Scoring ${pending.length} pending observed trades (ruleset v${version})...`);
 
-  let copies = 0, watch = 0, skip = 0;
+  let copies = 0, watch = 0, skip = 0, exitsMirrored = 0, exitsIgnored = 0;
   for (const o of pending) {
     const wallet = await prisma.walletProfile.findUnique({ where: { address: o.walletAddress } });
     if (!wallet) continue;
@@ -31,13 +34,48 @@ export async function scoreTrades() {
       throw err;
     }
 
-    const catStrengths = parse<Record<string, number>>(wallet.categoryStrengthsJson, {});
     const cat = o.marketCategory ?? market.category ?? "Uncategorized";
-    const walletCategoryScore = catStrengths[cat] ?? 0.3;
     const currentPrice =
       o.outcome.toLowerCase() === "no"
         ? market.noPrice ?? (market.yesPrice != null ? 1 - market.yesPrice : 0.5)
         : market.yesPrice ?? o.walletEntryPrice;
+
+    // STEP 1: classify the DIRECTION of the trade (buy = entry, sell = exit).
+    const action = classifyTradeDirection(
+      { side: o.side as "BUY" | "SELL", walletGlobalScore: wallet.globalScore, walletStatus: wallet.status },
+      rules,
+    );
+
+    // STEP 2a: a SELL (exit). We never open a fresh position from a sell.
+    if (action !== "consider_entry") {
+      const mirrored = action === "mirror_exit"
+        ? await mirrorWalletExit(o, currentPrice)
+        : 0;
+      if (action === "mirror_exit") exitsMirrored += mirrored;
+      else exitsIgnored++;
+      // Record a lightweight decision so the journal explains what happened.
+      await prisma.decisionJournal.create({
+        data: {
+          observedTradeId: o.id, walletAddress: o.walletAddress, marketId: o.marketId,
+          decision: "skip", copyScore: 0, confidence: 0,
+          reasonsJson: j([
+            action === "mirror_exit"
+              ? `Wallet SOLD (exited). Reliable wallet (score ${wallet.globalScore}, ${wallet.status}) — mirrored the exit by closing ${mirrored} copied position(s).`
+              : `Wallet SOLD (exited). Not opening a position from a sell. Seller not reliable enough to mirror (score ${wallet.globalScore}, ${wallet.status}) — ignoring the exit.`,
+          ]),
+          risksJson: j([]),
+          walletQualityScore: wallet.globalScore, roiScore: 0, consistencyScore: 0,
+          copyabilityScore: 0, categoryFitScore: 0, entryTimingScore: 0, spreadScore: 0,
+          liquidityScore: 0, thesisScore: 0, simulatedPositionSize: 0, ruleSetVersion: version,
+        },
+      });
+      skip++;
+      continue;
+    }
+
+    // STEP 2b: a BUY (entry) — run the normal copy-quality scorer.
+    const catStrengths = parse<Record<string, number>>(wallet.categoryStrengthsJson, {});
+    const walletCategoryScore = catStrengths[cat] ?? 0.3;
 
     // Recompute a rough roiScore proxy from stored roi30d.
     const walletRoiScore = Math.max(0, Math.min(1, (wallet.roi30d + 0.4) / 1.4));
@@ -110,8 +148,43 @@ export async function scoreTrades() {
     else skip++;
   }
 
-  log.info(`Decisions -> paper_copy: ${copies}, watchlist: ${watch}, skip: ${skip}`);
-  return { copies, watch, skip };
+  log.info(`Decisions -> paper_copy: ${copies}, watchlist: ${watch}, skip: ${skip} (exits mirrored: ${exitsMirrored}, exits ignored: ${exitsIgnored})`);
+  return { copies, watch, skip, exitsMirrored, exitsIgnored };
+}
+
+// When a RELIABLE tracked wallet sells (exits) a market, close any OPEN paper
+// positions we copied from that same wallet on that same market — mirroring
+// their exit. Returns how many positions we closed. Never opens anything.
+async function mirrorWalletExit(
+  o: { walletAddress: string; marketId: string; outcome: string },
+  currentPrice: number,
+): Promise<number> {
+  const open = await prisma.paperTrade.findMany({
+    where: {
+      walletAddress: o.walletAddress,
+      marketId: o.marketId,
+      outcome: o.outcome,
+      status: "open",
+    },
+  });
+  let closed = 0;
+  for (const pt of open) {
+    // Realize PnL at the current price (we "sold" our simulated shares).
+    const pnl = unrealizedPnl(pt.simulatedPositionSize, pt.entryPrice, currentPrice);
+    await prisma.paperTrade.update({
+      where: { id: pt.id },
+      data: {
+        status: "closed",
+        currentPrice,
+        unrealizedPnl: 0,
+        realizedPnl: pnl,
+        closedAt: new Date(),
+      },
+    });
+    closed++;
+    log.info(`Mirrored exit: closed paper trade ${pt.id} (${o.marketId}) at ${currentPrice}, realized $${pnl.toFixed(2)}`);
+  }
+  return closed;
 }
 
 if (require.main === module) {

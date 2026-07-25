@@ -48,6 +48,15 @@ export interface Rules {
     trackMinGlobalScore: number;
     watchMinGlobalScore: number;
   };
+  // Exit handling: how to react when a wallet SELLS (exits) a market.
+  exit: {
+    // Master switch: mirror a wallet's sell by closing our copied position.
+    mirrorWalletSell: boolean;
+    // Reliability gate: only mirror the sell if the wallet is still "track"
+    // status AND its global score is at least this. An unreliable wallet's
+    // sell should NOT make us dump our position.
+    minWalletScoreToMirror: number;
+  };
 }
 
 export const DEFAULT_RULES: Rules = {
@@ -84,6 +93,13 @@ export const DEFAULT_RULES: Rules = {
   status: {
     trackMinGlobalScore: 0.55,
     watchMinGlobalScore: 0.4,
+  },
+  exit: {
+    mirrorWalletSell: true,
+    // Only mirror an exit from a genuinely reliable wallet. If the seller has
+    // dropped below this, we IGNORE their sell and manage the position on our
+    // own rules instead — an unreliable trader's panic-sell isn't a signal.
+    minWalletScoreToMirror: 0.55,
   },
 };
 
