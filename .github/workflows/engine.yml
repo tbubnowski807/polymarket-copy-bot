@@ -11,7 +11,7 @@ name: Polybot Engine
 
 on:
   schedule:
-    - cron: "0 * * * *"     # every hour  -> monitor + score + paper PnL + review
+    - cron: "*/15 * * * *"  # every 15 min -> monitor + score + paper PnL + review
     - cron: "0 */4 * * *"   # every 4h    -> scan top 500 leaderboard wallets
     - cron: "0 2 * * *"     # ~10pm ET    -> auto rule update + end-of-day report
     - cron: "15 2 * * 1"    # ~10pm ET Sun-> weekly report
