@@ -12,12 +12,15 @@ import { config } from "@/lib/config";
 export async function scoreTrades() {
   const { rules, version } = await getActiveRules();
 
-  // ObservedTrades that have no decision yet.
+  // Find UNDECIDED observed trades. We fetch recent trades (newest first so we
+  // never miss fresh signals), drop any already decided, then sort the
+  // remaining OLDEST-first so a wallet's BUY is processed before its later SELL.
   const decided = await prisma.decisionJournal.findMany({ select: { observedTradeId: true } });
   const decidedSet = new Set(decided.map((d) => d.observedTradeId));
-  // Process oldest-first so a wallet's BUY is handled before its later SELL.
-  const observed = await prisma.observedTrade.findMany({ orderBy: { timestamp: "asc" }, take: 500 });
-  const pending = observed.filter((o) => !decidedSet.has(o.id));
+  const recent = await prisma.observedTrade.findMany({ orderBy: { createdAt: "desc" }, take: 1500 });
+  const pending = recent
+    .filter((o) => !decidedSet.has(o.id))
+    .sort((a, b) => +new Date(a.timestamp) - +new Date(b.timestamp));
 
   log.info(`Scoring ${pending.length} pending observed trades (ruleset v${version})...`);
 
