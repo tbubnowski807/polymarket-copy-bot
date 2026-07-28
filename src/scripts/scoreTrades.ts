@@ -142,6 +142,10 @@ export async function scoreTrades() {
           side: o.side,
           entryPrice: currentPrice,
           currentPrice,
+          // Slippage: what the wallet paid vs what WE paid at execution time.
+          // Positive = we entered at a worse (higher) price than the wallet.
+          walletEntryPrice: o.walletEntryPrice,
+          slippage: Math.round((currentPrice - o.walletEntryPrice) * 10000) / 10000,
           simulatedPositionSize: size,
           status: "open",
         },
@@ -178,6 +182,8 @@ async function mirrorWalletExit(
       where: { id: pt.id },
       data: {
         status: "closed",
+        exitReason: "sold_early",
+        exitPrice: currentPrice,
         currentPrice,
         unrealizedPnl: 0,
         realizedPnl: pnl,

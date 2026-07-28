@@ -38,6 +38,8 @@ export async function updatePnl() {
           unrealizedPnl: 0,
           realizedPnl: realized,
           status: "resolved",
+          exitReason: "resolved",
+          exitPrice: won ? 1 : 0,
           resolvedAt: new Date(),
         },
       });

@@ -38,8 +38,8 @@ export default async function OverviewPage() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Stat label="Total Paper PnL" value={<span className={pnlColor(o.totalPnl)}>{usd(o.totalPnl)}</span>} sub={`${o.resolvedCount} resolved`} />
-        <Stat label="Win Rate" value={pct(o.winRate)} sub="resolved paper trades" />
+        <Stat label="Total Paper PnL" value={<span className={pnlColor(o.totalPnl)}>{usd(o.totalPnl)}</span>} sub={<>realized {usd(o.realizedPnl)} · unrealized {usd(o.unrealizedPnl)}</>} />
+        <Stat label="Win Rate" value={pct(o.winRate)} sub={`${o.closedCount} closed trades`} />
         <Stat label="Open Positions" value={o.openPositions} sub="simulated, live" />
         <Stat label="Tracked Wallets" value={o.trackedWallets} sub="status = track" />
       </div>

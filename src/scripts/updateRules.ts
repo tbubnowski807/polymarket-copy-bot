@@ -46,6 +46,21 @@ async function gatherEvidence(): Promise<PerfEvidence> {
 export async function updateRules() {
   const { rules, version, id } = await getActiveRules();
   const ev = await gatherEvidence();
+
+  // MINIMUM-SAMPLE GATE: never change rules off a tiny/volatile sample. Rule
+  // changes must be based on CLOSED trades (resolved or sold), not unrealized
+  // swings on still-open positions. Require at least this many.
+  const MIN_CLOSED_TRADES = Number(process.env.MIN_CLOSED_TRADES_FOR_RULES ?? 20);
+  if (ev.totalResolvedCopies < MIN_CLOSED_TRADES) {
+    log.info(
+      `Rule update SKIPPED: only ${ev.totalResolvedCopies} closed trades (need ${MIN_CLOSED_TRADES}). ` +
+      `Not adjusting rules off an insufficient/unresolved sample.`,
+    );
+    // Still allow wallet downgrades (those are per-wallet, not global rules)?
+    // No — downgrades also need evidence. Hold everything until we have data.
+    return { changed: false, changes: [], newVersion: version, reason: "insufficient_closed_trades", closedTrades: ev.totalResolvedCopies };
+  }
+
   const { next, changes } = proposeRuleChanges(rules, ev);
 
   // Downgrade underperforming tracked wallets (logged as status changes).
@@ -83,7 +98,7 @@ export async function updateRules() {
         newRuleSetId: newSet.id,
         changedBy: "hermes",
         reason: `${c.path}: ${c.reason}`,
-        evidenceSummary: c.evidence,
+        evidenceSummary: `${c.evidence} [based on ${ev.totalResolvedCopies} closed trades]`,
         beforeJson: j({ [c.path]: c.before }),
         afterJson: j({ [c.path]: c.after }),
         expectedImprovement: c.expectedImprovement,

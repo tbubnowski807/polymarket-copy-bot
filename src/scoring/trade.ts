@@ -95,6 +95,15 @@ export function scoreTrade(input: TradeScoreInput, rules: Rules): TradeScore {
   if (input.timeToResolutionHours != null && input.timeToResolutionHours < 2)
     risks.push(`Only ${input.timeToResolutionHours.toFixed(1)}h to resolution — little room.`);
 
+  // ABSOLUTE price gate: buying near-certain outcomes is almost pure downside
+  // (tiny upside, total-loss risk). This forces a hard SKIP, not even watchlist.
+  const priceTooHigh = input.currentPrice > rules.copyability.maxEntryPrice;
+  const priceTooLow = input.currentPrice < rules.copyability.minEntryPrice;
+  if (priceTooHigh)
+    risks.push(`Price ${(input.currentPrice * 100).toFixed(0)}¢ above max entry ${(rules.copyability.maxEntryPrice * 100).toFixed(0)}¢ — too little upside to be worth the downside.`);
+  if (priceTooLow)
+    risks.push(`Price ${(input.currentPrice * 100).toFixed(0)}¢ below min entry ${(rules.copyability.minEntryPrice * 100).toFixed(0)}¢ — lottery-ticket longshot.`);
+
   // Hard gates -> force skip regardless of score.
   const hardSkip =
     input.walletGlobalScore < rules.tradeDecision.minWalletGlobalScore ||
@@ -103,7 +112,10 @@ export function scoreTrade(input: TradeScoreInput, rules: Rules): TradeScore {
     priceMovePenalized;
 
   let decision: TradeScore["decision"];
-  if (hardSkip) {
+  if (priceTooHigh || priceTooLow) {
+    // Price gate is absolute: never copy AND never watchlist a bad-price entry.
+    decision = "skip";
+  } else if (hardSkip) {
     decision = copyScore >= rules.tradeDecision.watchlistThreshold ? "watchlist" : "skip";
   } else if (copyScore >= rules.tradeDecision.paperCopyThreshold) {
     decision = "paper_copy";

@@ -30,6 +30,9 @@ export interface Rules {
     minLiquidity: number; // markets thinner than this are hard to copy
     maxPriceMoveSinceEntry: number; // if price ran past this, entry is gone
     maxEntryTiming: number; // 0..1 fraction of market life; later = worse
+    maxEntryPrice: number; // never buy above this price (0..1). Buying at 95c+
+                           // is almost pure downside: tiny upside, total loss risk.
+    minEntryPrice: number; // symmetric floor: don't buy sub-pennies either.
   };
   // Trade scoring thresholds (decision boundaries on 0..1 copyScore).
   tradeDecision: {
@@ -80,6 +83,10 @@ export const DEFAULT_RULES: Rules = {
     minLiquidity: 2000,
     maxPriceMoveSinceEntry: 0.08,
     maxEntryTiming: 0.75,
+    // Don't chase near-certain outcomes: at 92c the best case is +8c and the
+    // worst case is -92c. Skip anything priced above this.
+    maxEntryPrice: 0.92,
+    minEntryPrice: 0.05,
   },
   tradeDecision: {
     paperCopyThreshold: 0.65,

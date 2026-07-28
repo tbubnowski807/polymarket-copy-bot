@@ -151,6 +151,12 @@ model PaperTrade {
   unrealizedPnl         Float     @default(0)
   realizedPnl           Float     @default(0)
   status                String    @default("open") // "open" | "closed" | "resolved"
+  exitReason            String?   // "resolved" | "sold_early" | null (still open)
+  exitPrice             Float?    // price at which the position was closed
+  // Slippage: the copied wallet's entry price vs OUR paper execution price.
+  // Positive = we got a worse price than the wallet (paid more to enter).
+  walletEntryPrice      Float?
+  slippage              Float?
   openedAt              DateTime  @default(now())
   closedAt              DateTime?
   resolvedAt            DateTime?

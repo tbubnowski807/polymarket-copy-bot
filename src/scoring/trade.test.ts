@@ -54,4 +54,21 @@ describe("trade scoring", () => {
   it("higher confidence yields larger size", () => {
     expect(sizeFromConfidence(0.9, DEFAULT_RULES)).toBeGreaterThan(sizeFromConfidence(0.1, DEFAULT_RULES));
   });
+
+  it("SKIPS a buy priced above maxEntryPrice (the 99-cent problem)", () => {
+    // Strong wallet, great market, but priced at 98c -> must hard-skip.
+    const s = scoreTrade(input({ currentPrice: 0.98, walletEntryPrice: 0.98 }), DEFAULT_RULES);
+    expect(s.decision).toBe("skip");
+    expect(s.risks.join(" ")).toMatch(/above max entry|too little upside/i);
+  });
+
+  it("SKIPS a buy priced below minEntryPrice (longshot lottery ticket)", () => {
+    const s = scoreTrade(input({ currentPrice: 0.02, walletEntryPrice: 0.02 }), DEFAULT_RULES);
+    expect(s.decision).toBe("skip");
+  });
+
+  it("still allows a well-priced entry (e.g. 60c)", () => {
+    const s = scoreTrade(input({ currentPrice: 0.6, walletEntryPrice: 0.6 }), DEFAULT_RULES);
+    expect(s.decision).toBe("paper_copy");
+  });
 });

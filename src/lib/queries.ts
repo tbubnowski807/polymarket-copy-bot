@@ -3,12 +3,21 @@ import { prisma } from "@/lib/prisma";
 
 export async function getOverview() {
   const paperTrades = await prisma.paperTrade.findMany();
-  const realizedResolved = paperTrades.filter((p) => p.status === "resolved");
-  const totalPnl = paperTrades.reduce((a, p) => a + p.realizedPnl + p.unrealizedPnl, 0);
-  const winRate = realizedResolved.length
-    ? realizedResolved.filter((p) => p.realizedPnl > 0).length / realizedResolved.length
+  const closed = paperTrades.filter((p) => p.status === "closed" || p.status === "resolved");
+  const open = paperTrades.filter((p) => p.status === "open");
+
+  // REALIZED = money locked in from closed positions (resolved or sold early).
+  // UNREALIZED = paper-only swing on positions still open.
+  const realizedPnl = closed.reduce((a, p) => a + p.realizedPnl, 0);
+  const unrealizedPnl = open.reduce((a, p) => a + p.unrealizedPnl, 0);
+  const totalPnl = realizedPnl + unrealizedPnl;
+
+  // Win rate is computed on CLOSED trades only (open ones haven't happened yet).
+  const winRate = closed.length
+    ? closed.filter((p) => p.realizedPnl > 0).length / closed.length
     : 0;
-  const openPositions = paperTrades.filter((p) => p.status === "open").length;
+
+  const openPositions = open.length;
   const trackedWallets = await prisma.walletProfile.count({ where: { status: "track" } });
 
   const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
@@ -19,12 +28,26 @@ export async function getOverview() {
   const latestReport = await prisma.dailyReport.findFirst({ orderBy: { createdAt: "desc" } });
   const latestRuleChanges = await prisma.ruleChange.findMany({ orderBy: { createdAt: "desc" }, take: 3 });
 
-  // PnL over time from snapshots (aggregate net pnl per hour bucket).
   const snaps = await prisma.pnlSnapshot.findMany({ orderBy: { collectedAt: "asc" } });
   const pnlSeries = bucketPnl(snaps);
 
-  return { totalPnl, winRate, openPositions, trackedWallets, copyCandidatesToday, latestReport, latestRuleChanges, pnlSeries, resolvedCount: realizedResolved.length };
+  return {
+    totalPnl: round2(totalPnl),
+    realizedPnl: round2(realizedPnl),
+    unrealizedPnl: round2(unrealizedPnl),
+    winRate,
+    openPositions,
+    closedCount: closed.length,
+    trackedWallets,
+    copyCandidatesToday,
+    latestReport,
+    latestRuleChanges,
+    pnlSeries,
+    resolvedCount: closed.length,
+  };
 }
+
+function round2(x: number): number { return Math.round(x * 100) / 100; }
 
 // Cumulative realized PnL curve from resolved paper trades + running unrealized.
 function bucketPnl(snaps: { collectedAt: Date; pnl: number }[]) {
@@ -69,11 +92,44 @@ export async function getSignals() {
 }
 
 export async function getPaperTrades() {
-  return prisma.paperTrade.findMany({
-    orderBy: [{ status: "asc" }, { openedAt: "desc" }],
-    include: { decision: true },
-    take: 200,
+  // OPEN positions = the trades you're currently "in".
+  const openTrades = await prisma.paperTrade.findMany({
+    where: { status: "open" },
+    orderBy: { openedAt: "desc" },
+    include: { decision: { include: { observedTrade: true } } },
   });
+  // CLOSED trades = the log of finished positions (resolved or sold early).
+  const closedTrades = await prisma.paperTrade.findMany({
+    where: { status: { in: ["closed", "resolved"] } },
+    orderBy: { closedAt: "desc" },
+    include: { decision: { include: { observedTrade: true } } },
+    take: 300,
+  });
+
+  // Consistent totals (whole book, not a truncated slice).
+  const allForTotals = await prisma.paperTrade.findMany({
+    select: { status: true, realizedPnl: true, unrealizedPnl: true },
+  });
+  const closedAll = allForTotals.filter((p) => p.status !== "open");
+  const openAll = allForTotals.filter((p) => p.status === "open");
+  const realizedPnl = round2(closedAll.reduce((a, p) => a + p.realizedPnl, 0));
+  const unrealizedPnl = round2(openAll.reduce((a, p) => a + p.unrealizedPnl, 0));
+  const wins = closedAll.filter((p) => p.realizedPnl > 0).length;
+  const winRate = closedAll.length ? wins / closedAll.length : 0;
+
+  return {
+    openTrades,
+    closedTrades,
+    totals: {
+      realizedPnl,
+      unrealizedPnl,
+      totalPnl: round2(realizedPnl + unrealizedPnl),
+      openCount: openAll.length,
+      closedCount: closedAll.length,
+      wins,
+      winRate,
+    },
+  };
 }
 
 export async function getJournal() {
